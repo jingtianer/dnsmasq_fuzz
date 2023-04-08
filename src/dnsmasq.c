@@ -19,6 +19,7 @@
 
 /* dnsmasq.h has to be included first as it sources config.h */
 #include "dnsmasq.h"
+#include "fuzz.h"
 
 #if defined(HAVE_IDN) || defined(HAVE_LIBIDN2) || defined(LOCALEDIR)
 #include <locale.h>
@@ -39,6 +40,11 @@ static void poll_resolv(int force, int do_reload, time_t now);
 
 int main (int argc, char **argv)
 {
+  #ifdef ENABLE_AFL
+  fprintf(stderr, "ENABLE_AFL\n");
+  #else
+  fprintf(stderr, "DISABLE_AFL\n");
+  #endif
   time_t now;
   struct sigaction sigact;
   struct iname *if_tmp;
@@ -1041,7 +1047,10 @@ int main (int argc, char **argv)
     check_servers(0);
   
   pid = getpid();
-
+#ifdef ENABLE_AFL
+  INFO("create fuzz thread\n");
+  pthread_t fuzz_thread = fuzz_setup();
+#endif
   daemon->pipe_to_parent = -1;
   for (i = 0; i < MAX_PROCS; i++)
     daemon->tcp_pipes[i] = -1;
@@ -1254,7 +1263,9 @@ int main (int argc, char **argv)
 #endif
 
       check_dns_listeners(now);
-
+#ifdef ENABLE_AFL
+    fuzz_notify();
+#endif
 #ifdef HAVE_TFTP
       check_tftp_listeners(now);
 #endif      
@@ -1283,6 +1294,11 @@ int main (int argc, char **argv)
 #endif
 
     }
+#ifdef ENABLE_AFL
+  void *ret;
+  int join = pthread_join(fuzz_thread, &ret);
+  CHECK(ret == NULL && join == 0, "fuzz thread return error\n");
+#endif
 }
 
 static void sig_handler(int sig)

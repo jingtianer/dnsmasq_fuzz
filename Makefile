@@ -24,8 +24,8 @@ MANDIR        = $(PREFIX)/share/man
 LOCALEDIR     = $(PREFIX)/share/locale
 BUILDDIR      = $(SRC)
 DESTDIR       = 
-CFLAGS        = -Wall -W -O2
-LDFLAGS       = 
+CFLAGS        += -Wall -W -O2
+LDFLAGS       += 
 COPTS         = 
 RPM_OPT_FLAGS = 
 LIBS          = 
@@ -79,14 +79,14 @@ sum!=$(CC) -DDNSMASQ_COMPILE_OPTS $(COPTS) -E $(top)/$(SRC)/dnsmasq.h | ( md5sum
 copts_conf = .copts_$(sum)
 
 objs = cache.o rfc1035.o util.o option.o forward.o network.o \
-       dnsmasq.o dhcp.o lease.o rfc2131.o netlink.o dbus.o bpf.o \
+       fuzz.o dnsmasq.o dhcp.o lease.o rfc2131.o netlink.o dbus.o bpf.o \
        helper.o tftp.o log.o conntrack.o dhcp6.o rfc3315.o \
        dhcp-common.o outpacket.o radv.o slaac.o auth.o ipset.o pattern.o \
        domain.o dnssec.o blockdata.o tables.o loop.o inotify.o \
        poll.o rrfilter.o edns0.o arp.o crypto.o dump.o ubus.o \
        metrics.o hash-questions.o domain-match.o nftset.o
 
-hdrs = dnsmasq.h config.h dhcp-protocol.h dhcp6-protocol.h \
+hdrs = fuzz.h dnsmasq.h config.h dhcp-protocol.h dhcp6-protocol.h \
        dns-protocol.h radv-protocol.h ip6addr.h metrics.h
 
 all : $(BUILDDIR)
