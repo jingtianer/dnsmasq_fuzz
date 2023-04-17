@@ -1,0 +1,67 @@
+From 3d706636245d38e2a82e6264d005c0d93d3e1dc3 Mon Sep 17 00:00:00 2001
+From: Jingtianer <1043672911@qq.com>
+Date: Sat, 8 Apr 2023 16:27:55 +0800
+Subject: [PATCH 2/2] fuzz script
+
+---
+ script/fuzz.sh            |  32 ++++++++++++++++++++++++++++++++
+ script/in/dns_queries.raw | Bin 0 -> 301 bytes
+ 2 files changed, 32 insertions(+)
+ create mode 100755 script/fuzz.sh
+ create mode 100644 script/in/dns_queries.raw
+
+diff --git a/script/fuzz.sh b/script/fuzz.sh
+new file mode 100755
+index 0000000..89e46fb
+--- /dev/null
++++ b/script/fuzz.sh
+@@ -0,0 +1,32 @@
++set -e
++git clone https://github.com/jingtianer/dnsmasq_fuzz.git dnsmasq
++SUBJECT=$PWD/dnsmasq
++
++export FUZZER=$AFLFAST
++
++export CC=$FUZZER/afl-clang-fast
++export CXX=$FUZZER/afl-clang-fast++
++
++export CFLAGS="-DENABLE_AFL=1"
++export CXXFLAGS="-DENABLE_AFL=1"
++export LDFLAGS="$CFLAGS -lpthread"
++
++pushd $SUBJECT
++    sudo make clean
++	make -j
++popd
++
++tee dnsmasq.conf <<-'EOF'
++port=5599
++no-daemon
++no-resolv
++interface=lo
++bind-interfaces
++no-hosts
++address=/test.com/5.5.5.5
++EOF
++
++
++export AFL_PERSISTENT=1
++export FUZZ_SERVER_CONFIG=127.0.0.1:5599
++$FUZZER/afl-fuzz -t 1000 -m none -i in -o out -- $SUBJECT/src/dnsmasq --conf-file=dnsmasq.conf
+\ No newline at end of file
+diff --git a/script/in/dns_queries.raw b/script/in/dns_queries.raw
+new file mode 100644
+index 0000000000000000000000000000000000000000..c2199e29784259eea79ff06b702381a0b0481029
+GIT binary patch
+literal 301
+zcmWeIVq{<dA`oCp&(BZKNo7vX&t+f`U|{^7k3){1fzfjz4mnu{#@V|Oa?FMXCXANM
+zhL%Q5W@hY}dAf-yDMc)aMFoir3_J{sr3a9dmY0{a<)xM+6{j%g7o~%o#rWY09(frC
+z#($4d<(V^!lOdY_GcYQ2AxXj|m>3v8CL$zQ<8x9H3s~Yyk_(tplG);Oi&K(|xl2n@
+XbBZgAOHy--S#$D}6LT0C6d4!+epo!U
+
+literal 0
+HcmV?d00001
+
+-- 
+2.7.4
+

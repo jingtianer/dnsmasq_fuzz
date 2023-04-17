@@ -1,0 +1,278 @@
+From e2a01e74795a0b7f5b6d1555aecf226b5869ed74 Mon Sep 17 00:00:00 2001
+From: Jingtianer <1043672911@qq.com>
+Date: Sat, 8 Apr 2023 16:25:08 +0800
+Subject: [PATCH 1/2] fuzz.c
+
+---
+ Makefile      |   8 ++--
+ src/dnsmasq.c |  20 +++++++-
+ src/fuzz.c    | 146 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/fuzz.h    |  10 ++++
+ 4 files changed, 178 insertions(+), 6 deletions(-)
+ create mode 100644 src/fuzz.c
+ create mode 100644 src/fuzz.h
+
+diff --git a/Makefile b/Makefile
+index 48e8d3b..1cdffba 100644
+--- a/Makefile
++++ b/Makefile
+@@ -24,8 +24,8 @@ MANDIR        = $(PREFIX)/share/man
+ LOCALEDIR     = $(PREFIX)/share/locale
+ BUILDDIR      = $(SRC)
+ DESTDIR       = 
+-CFLAGS        = -Wall -W -O2
+-LDFLAGS       = 
++CFLAGS        += -Wall -W -O2
++LDFLAGS       += 
+ COPTS         = 
+ RPM_OPT_FLAGS = 
+ LIBS          = 
+@@ -79,14 +79,14 @@ sum!=$(CC) -DDNSMASQ_COMPILE_OPTS $(COPTS) -E $(top)/$(SRC)/dnsmasq.h | ( md5sum
+ copts_conf = .copts_$(sum)
+ 
+ objs = cache.o rfc1035.o util.o option.o forward.o network.o \
+-       dnsmasq.o dhcp.o lease.o rfc2131.o netlink.o dbus.o bpf.o \
++       fuzz.o dnsmasq.o dhcp.o lease.o rfc2131.o netlink.o dbus.o bpf.o \
+        helper.o tftp.o log.o conntrack.o dhcp6.o rfc3315.o \
+        dhcp-common.o outpacket.o radv.o slaac.o auth.o ipset.o pattern.o \
+        domain.o dnssec.o blockdata.o tables.o loop.o inotify.o \
+        poll.o rrfilter.o edns0.o arp.o crypto.o dump.o ubus.o \
+        metrics.o hash-questions.o domain-match.o nftset.o
+ 
+-hdrs = dnsmasq.h config.h dhcp-protocol.h dhcp6-protocol.h \
++hdrs = fuzz.h dnsmasq.h config.h dhcp-protocol.h dhcp6-protocol.h \
+        dns-protocol.h radv-protocol.h ip6addr.h metrics.h
+ 
+ all : $(BUILDDIR)
+diff --git a/src/dnsmasq.c b/src/dnsmasq.c
+index c77d9c3..0362fb7 100644
+--- a/src/dnsmasq.c
++++ b/src/dnsmasq.c
+@@ -19,6 +19,7 @@
+ 
+ /* dnsmasq.h has to be included first as it sources config.h */
+ #include "dnsmasq.h"
++#include "fuzz.h"
+ 
+ #if defined(HAVE_IDN) || defined(HAVE_LIBIDN2) || defined(LOCALEDIR)
+ #include <locale.h>
+@@ -39,6 +40,11 @@ static void poll_resolv(int force, int do_reload, time_t now);
+ 
+ int main (int argc, char **argv)
+ {
++  #ifdef ENABLE_AFL
++  fprintf(stderr, "ENABLE_AFL\n");
++  #else
++  fprintf(stderr, "DISABLE_AFL\n");
++  #endif
+   time_t now;
+   struct sigaction sigact;
+   struct iname *if_tmp;
+@@ -1041,7 +1047,10 @@ int main (int argc, char **argv)
+     check_servers(0);
+   
+   pid = getpid();
+-
++#ifdef ENABLE_AFL
++  INFO("create fuzz thread\n");
++  pthread_t fuzz_thread = fuzz_setup();
++#endif
+   daemon->pipe_to_parent = -1;
+   for (i = 0; i < MAX_PROCS; i++)
+     daemon->tcp_pipes[i] = -1;
+@@ -1254,7 +1263,9 @@ int main (int argc, char **argv)
+ #endif
+ 
+       check_dns_listeners(now);
+-
++#ifdef ENABLE_AFL
++    fuzz_notify();
++#endif
+ #ifdef HAVE_TFTP
+       check_tftp_listeners(now);
+ #endif      
+@@ -1283,6 +1294,11 @@ int main (int argc, char **argv)
+ #endif
+ 
+     }
++#ifdef ENABLE_AFL
++  void *ret;
++  int join = pthread_join(fuzz_thread, &ret);
++  CHECK(ret == NULL && join == 0, "fuzz thread return error\n");
++#endif
+ }
+ 
+ static void sig_handler(int sig)
+diff --git a/src/fuzz.c b/src/fuzz.c
+new file mode 100644
+index 0000000..b2a3c65
+--- /dev/null
++++ b/src/fuzz.c
+@@ -0,0 +1,146 @@
++
++
++#ifdef ENABLE_AFL
++#include "fuzz.h"
++#include <errno.h>
++#include <pthread.h>
++#include <unistd.h>
++#include <signal.h>
++#include <stdlib.h>
++#include <fcntl.h>
++#include <pthread.h>
++
++#include <stdio.h>
++#include <string.h>
++
++#include <sys/socket.h>
++#include <netinet/in.h>
++
++#define BUF_SIZE 65536
++#define bool char
++#define true 1
++#define false 0
++
++static pthread_cond_t cond;
++static pthread_mutex_t mutex;
++static bool ready;
++
++static void *work_thread()
++{
++    // freopen ("logmasq", "w", stderr);
++    INFO("fuzz thread startup successfully\n");
++    char *host;
++    char *port;
++    struct sockaddr_in servaddr;
++    int sockfd;
++    void *buf;
++    int inputfd;
++    int loop = 0;
++
++    host = getenv("FUZZ_SERVER_CONFIG");
++    CHECK(host != NULL, "FUZZ_SERVER_CONFIG is not defined\n");
++    host = strdup(host);
++    CHECK(host != NULL, "host is null\n");
++    port = strchr(host, ':');
++    CHECK(port != NULL, "port is null\n");
++    *port = 0;
++    port++;
++    INFO("port = %s, addr = %s\n", port, host);
++    memset(&servaddr, 0, sizeof(servaddr));
++    servaddr.sin_family = AF_INET;
++    CHECK(inet_pton(AF_INET, host, &servaddr.sin_addr) == 1, "invalid port\n");
++    servaddr.sin_port = htons(atoi(port));
++
++    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
++    CHECK(sockfd != -1, "socket creation failed\n");
++
++    buf = malloc(BUF_SIZE);
++    CHECK(buf != NULL, "memory allocation failed\n");
++    char *inputfile = getenv("FUZZ_INPUT_FILE");
++    if (inputfile)
++    {
++        errno = 0;
++        inputfd = open(inputfile, O_RDONLY);
++        CHECK(inputfd != -1, "fail to open input file\n");
++    }
++    else
++    {
++        inputfd = open("/dev/fd/0", O_RDONLY);
++    }
++    free(host);
++#ifdef __AFL_LOOP
++    while (__AFL_LOOP(1000))
++    {
++        INFO("__AFL_LOOP(%d)\n", loop);
++        loop++;
++#else
++    {
++        INFO("NO AFL_LOOP\n");
++#endif /* ifdef __AFL_LOOP */
++        size_t length;
++        size_t sendsize;
++
++        errno = 0;
++        length = read(inputfd, buf, BUF_SIZE);
++        CHECK(length != -1, "fail to read input file\n");
++        if (length == 0)
++        {
++#ifdef __AFL_LOOP
++            continue;
++#else
++            goto next;
++#endif /* ifdef __AFL_LOOP */
++        }
++        INFO("read from input = %s\n", buf);
++        CHECK(pthread_mutex_lock(&mutex) == 0, "fail to get mutex\n");
++
++        ready = false;
++
++        length = sendto(sockfd, buf, length, 0,
++                        (struct sockaddr *)&servaddr, sizeof(servaddr));
++        CHECK(length == length, "fail to send\n");
++        memset(buf, 0, BUF_SIZE);
++        (void)recvfrom(sockfd, buf, 65536, MSG_DONTWAIT,
++                       (struct sockaddr *)&servaddr, sizeof(servaddr));
++        INFO("before wait, recv = %s\n", buf);
++        while (!ready)
++        {
++            pthread_cond_wait(&cond, &mutex);
++        }
++        INFO("after wait\n");
++        CHECK(pthread_mutex_unlock(&mutex) == 0, "fail to unlock mutex\n");
++    next:;
++    }
++    INFO("finish afl, exit\n");
++    free(buf);
++    close(sockfd);
++    fclose(stderr);
++    exit(0);
++    return (NULL);
++}
++
++void fuzz_notify()
++{
++    INFO("fuzz notify\n");
++    CHECK(pthread_mutex_lock(&mutex) == 0, "notify fail to get mutex\n");
++
++    ready = true;
++
++    CHECK(pthread_cond_signal(&cond) == 0, "notify fail to signal work thread\n");
++    CHECK(pthread_mutex_unlock(&mutex) == 0, "notify fail to unlock mutex\n");
++    INFO("fuzz notify end, ready = %d\n", ready);
++}
++
++pthread_t fuzz_setup()
++{
++    pthread_t thread;
++    if (getenv("AFL_PERSISTENT"))
++    {
++        CHECK(pthread_mutex_init(&mutex, NULL) == 0, "fail to init mutex\n");
++        CHECK(pthread_cond_init(&cond, NULL) == 0, "fail to init cond\n");
++        CHECK(pthread_create(&thread, NULL, work_thread, NULL) == 0, "fail to create work thread\n");
++    }
++    return thread;
++}
++
++#endif
+\ No newline at end of file
+diff --git a/src/fuzz.h b/src/fuzz.h
+new file mode 100644
+index 0000000..d148329
+--- /dev/null
++++ b/src/fuzz.h
+@@ -0,0 +1,10 @@
++#ifndef FUZZ_H
++#define FUZZ_H
++#include <pthread.h>
++#define CHECK(x, message, ...) if(!(x)) {fprintf(stderr, "%s error %s at %s:%d\n---------ERROR: ", __TIMESTAMP__, strerror(errno), __FILE__, __LINE__); fprintf(stderr, (char*)message, ##__VA_ARGS__); exit(errno); }
++#define INFO(message, ...) fprintf(stderr, "%s at %s:%d\n---------INFO: ", __TIMESTAMP__, __FILE__, __LINE__); fprintf(stderr, message, ##__VA_ARGS__)
++void fuzz_notify(void);
++
++pthread_t fuzz_setup(void);
++
++#endif
+\ No newline at end of file
+-- 
+2.7.4
+
